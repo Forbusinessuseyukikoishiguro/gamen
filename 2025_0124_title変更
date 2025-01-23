@@ -93,7 +93,7 @@ class データ分析:
         return fig
 
 def main():
-    st.title("🌸文字起こし & 会議参加アシスタントツール🌸")
+    st.title("🌸新人エンジニア応援 会議ちょこっと応援ツール🌸")
 
     # OpenAI APIキーの入力
     api_key = st.text_input("OpenAI APIキーを入力してください", type="password")
