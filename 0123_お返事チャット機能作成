@@ -1,0 +1,258 @@
+import streamlit as st
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
+import speech_recognition as sr
+import pyttsx3
+import av
+import numpy as np
+import pandas as pd
+from datetime import datetime, timedelta
+import logging
+import openai
+from dataclasses import dataclass
+from typing import Optional, Dict, List, Any
+import queue
+import threading
+import plotly.express as px
+from sklearn.linear_model import LinearRegression
+
+# ログ設定
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler()],
+)
+logger = logging.getLogger(__name__)
+
+
+# 音声設定
+@dataclass
+class 音声設定:
+    サンプルレート: int = 16000
+    チャンクサイズ: int = 1024
+    タイムアウト: float = 2.0
+    言語: str = "ja-JP"
+
+
+class 音声認識:
+    def __init__(self, 設定: 音声設定 = 音声設定()):
+        self.recognizer = sr.Recognizer()
+        self.設定 = 設定
+        self.認識中 = False
+        self.音声キュー = queue.Queue()
+        self._認識器設定()
+
+    def _認識器設定(self):
+        self.recognizer.energy_threshold = 3000
+        self.recognizer.dynamic_energy_threshold = True
+        self.recognizer.pause_threshold = 1.0
+
+    def 認識開始(self):
+        if not self.認識中:
+            self.認識中 = True
+            threading.Thread(target=self._認識スレッド, daemon=True).start()
+
+    def 認識停止(self):
+        self.認識中 = False
+
+    def _認識スレッド(self):
+        try:
+            with sr.Microphone(sample_rate=self.設定.サンプルレート) as source:
+                logger.info("周辺ノイズを調整中...")
+                self.recognizer.adjust_for_ambient_noise(source, duration=2)
+                logger.info("音声認識を開始しました")
+
+                while self.認識中:
+                    try:
+                        audio = self.recognizer.listen(
+                            source, timeout=self.設定.タイムアウト
+                        )
+                        text = self.recognizer.recognize_google(
+                            audio, language=self.設定.言語
+                        )
+                        logger.info(f"認識結果: {text}")
+                        self.音声キュー.put(text)
+                    except sr.WaitTimeoutError:
+                        continue
+                    except sr.UnknownValueError:
+                        logger.info("音声を認識できませんでした")
+                    except Exception as e:
+                        logger.error(f"音声認識エラー: {str(e)}")
+
+        except Exception as e:
+            logger.error(f"認識スレッドエラー: {str(e)}")
+            self.認識中 = False
+
+
+@dataclass
+class 音声合成設定:
+    速度: int = 150
+    音量: float = 1.0
+    声種: str = "japanese"
+
+
+class 音声合成:
+    def __init__(self, 設定: 音声合成設定 = 音声合成設定()):
+        self.engine = pyttsx3.init()
+        self._合成器設定(設定)
+
+    def _合成器設定(self, 設定: 音声合成設定):
+        self.engine.setProperty("rate", 設定.速度)
+        self.engine.setProperty("volume", 設定.音量)
+        voices = self.engine.getProperty("voices")
+        for voice in voices:
+            if 設定.声種 in voice.name.lower():
+                self.engine.setProperty("voice", voice.id)
+                break
+
+    def テキスト読み上げ(self, テキスト: str):
+        try:
+            self.engine.say(テキスト)
+            self.engine.runAndWait()
+        except Exception as e:
+            logger.error(f"音声合成エラー: {str(e)}")
+
+
+class データ分析:
+    def __init__(self):
+        self.データ = []
+
+    def データ追加(self, テキスト: str, タイムスタンプ: datetime):
+        self.データ.append(
+            {
+                "テキスト": テキスト,
+                "タイムスタンプ": タイムスタンプ,
+                "文字数": len(テキスト),
+            }
+        )
+
+    def 傾向分析(self):
+        if not self.データ:
+            return None
+
+        df = pd.DataFrame(self.データ)
+        df["時間"] = pd.to_datetime(df["タイムスタンプ"])
+        df["時間差"] = df["時間"].diff().dt.total_seconds()
+
+        統計 = {
+            "対話回数": len(df),
+            "平均文字数": df["文字数"].mean(),
+            "平均応答時間": df["時間差"].mean() if len(df) > 1 else 0,
+        }
+
+        return 統計
+
+    def 予測(self):
+        if len(self.データ) < 5:
+            return None
+
+        df = pd.DataFrame(self.データ)
+        df["経過時間"] = (
+            pd.to_datetime(df["タイムスタンプ"])
+            - pd.to_datetime(df["タイムスタンプ"].iloc[0])
+        ).dt.total_seconds()
+
+        X = df[["経過時間"]]
+        y = df["文字数"]
+
+        model = LinearRegression()
+        model.fit(X, y)
+
+        future_times = np.array(
+            range(int(X.iloc[-1]), int(X.iloc[-1] + 1800), 300)
+        ).reshape(-1, 1)
+        predictions = model.predict(future_times)
+
+        return {"times": future_times.flatten(), "predictions": predictions}
+
+    def グラフ作成(self):
+        if not self.データ:
+            return None
+
+        df = pd.DataFrame(self.データ)
+        df["時間"] = pd.to_datetime(df["タイムスタンプ"])
+
+        fig = px.line(df, x="時間", y="文字数", title="対話の推移")
+        return fig
+
+
+def main():
+    st.title("音声チャット & データ分析アプリケーション")
+
+    if "音声認識" not in st.session_state:
+        st.session_state.音声認識 = 音声認識()
+    if "音声合成" not in st.session_state:
+        st.session_state.音声合成 = 音声合成()
+    if "データ分析" not in st.session_state:
+        st.session_state.データ分析 = データ分析()
+
+    api_key = st.text_input("OpenAI APIキーを入力してください", type="password")
+    if not api_key:
+        st.warning("OpenAI APIキーが必要です")
+        return
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("音声認識開始"):
+            st.session_state.音声認識.認識開始()
+            st.success("音声認識を開始しました")
+
+    with col2:
+        if st.button("音声認識停止"):
+            st.session_state.音声認識.認識停止()
+            st.info("音声認識を停止しました")
+
+    try:
+        if not st.session_state.音声認識.音声キュー.empty():
+            認識テキスト = st.session_state.音声認識.音声キュー.get()
+            st.write(f"認識されたテキスト: {認識テキスト}")
+
+            client = openai.OpenAI(api_key=api_key)
+            response = client.chat.completions.create(
+                model="gpt-4-turbo-preview",
+                messages=[{"role": "user", "content": 認識テキスト}],
+            )
+            アシスタント応答 = response.choices[0].message.content
+            st.write(f"アシスタントの応答: {アシスタント応答}")
+
+            # データ分析用にデータを追加
+            st.session_state.データ分析.データ追加(認識テキスト, datetime.now())
+            st.session_state.データ分析.データ追加(アシスタント応答, datetime.now())
+
+            # データ分析の表示
+            if st.session_state.データ分析.データ:
+                st.subheader("データ分析")
+
+                統計 = st.session_state.データ分析.傾向分析()
+                if 統計:
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("総対話回数", f"{統計['対話回数']}回")
+                    col2.metric("平均文字数", f"{統計['平均文字数']:.1f}文字")
+                    col3.metric("平均応答時間", f"{統計['平均応答時間']:.1f}秒")
+
+                グラフ = st.session_state.データ分析.グラフ作成()
+                if グラフ:
+                    st.plotly_chart(グラフ)
+
+                予測結果 = st.session_state.データ分析.予測()
+                if 予測結果:
+                    st.subheader("今後30分の予測")
+                    予測df = pd.DataFrame(
+                        {
+                            "時間": [
+                                datetime.now() + timedelta(seconds=t)
+                                for t in 予測結果["times"]
+                            ],
+                            "予測文字数": 予測結果["predictions"],
+                        }
+                    )
+                    st.line_chart(予測df.set_index("時間"))
+
+            ステータス = "録音中..." if st.session_state.音声認識.認識中 else "停止中"
+            st.sidebar.write(f"ステータス: {ステータス}")
+
+    except Exception as e:
+        st.error(f"エラーが発生しました: {str(e)}")
+
+
+if __name__ == "__main__":
+    main()
