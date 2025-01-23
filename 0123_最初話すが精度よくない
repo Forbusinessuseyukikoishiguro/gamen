@@ -1,0 +1,153 @@
+import streamlit as st
+import speech_recognition as sr
+import pyttsx3
+import queue
+import threading
+import logging
+import openai
+from dataclasses import dataclass
+from datetime import datetime
+
+# Logging Configuration
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler()],
+)
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class VoiceSettings:
+    sample_rate: int = 16000
+    chunk_size: int = 1024
+    timeout: float = 2.0
+    language: str = "ja-JP"
+
+
+class SpeechRecognition:
+    def __init__(self, settings: VoiceSettings = VoiceSettings()):
+        self.recognizer = sr.Recognizer()
+        self.settings = settings
+        self.is_recognizing = False
+        self.voice_queue = queue.Queue()
+        self._configure_recognizer()
+
+    def _configure_recognizer(self):
+        self.recognizer.energy_threshold = 3000
+        self.recognizer.dynamic_energy_threshold = True
+        self.recognizer.pause_threshold = 1.0
+
+    def start_recognition(self):
+        if not self.is_recognizing:
+            self.is_recognizing = True
+            threading.Thread(target=self._recognition_thread, daemon=True).start()
+
+    def stop_recognition(self):
+        self.is_recognizing = False
+
+    def _recognition_thread(self):
+        try:
+            with sr.Microphone(sample_rate=self.settings.sample_rate) as source:
+                logger.info("Adjusting for background noise...")
+                self.recognizer.adjust_for_ambient_noise(source, duration=2)
+                logger.info("Speech recognition started.")
+
+                while self.is_recognizing:
+                    try:
+                        audio = self.recognizer.listen(
+                            source, timeout=self.settings.timeout
+                        )
+                        text = self.recognizer.recognize_google(
+                            audio, language=self.settings.language
+                        )
+                        logger.info(f"Recognized: {text}")
+                        self.voice_queue.put(text)
+                    except sr.WaitTimeoutError:
+                        continue
+                    except sr.UnknownValueError:
+                        logger.info("Could not recognize speech.")
+                    except Exception as e:
+                        logger.error(f"Speech recognition error: {str(e)}")
+        except Exception as e:
+            logger.error(f"Recognition thread error: {str(e)}")
+            self.is_recognizing = False
+
+
+@dataclass
+class VoiceSynthesisSettings:
+    rate: int = 150
+    volume: float = 1.0
+    voice_type: str = "japanese"
+
+
+class VoiceSynthesis:
+    def __init__(self, settings: VoiceSynthesisSettings = VoiceSynthesisSettings()):
+        self.engine = pyttsx3.init()
+        self._configure_synthesizer(settings)
+
+    def _configure_synthesizer(self, settings: VoiceSynthesisSettings):
+        self.engine.setProperty("rate", settings.rate)
+        self.engine.setProperty("volume", settings.volume)
+        voices = self.engine.getProperty("voices")
+        for voice in voices:
+            if settings.voice_type in voice.name.lower():
+                self.engine.setProperty("voice", voice.id)
+                break
+
+    def speak_text(self, text: str):
+        try:
+            self.engine.say(text)
+            self.engine.runAndWait()
+        except Exception as e:
+            logger.error(f"Voice synthesis error: {str(e)}")
+
+
+def main():
+    st.title("Voice Chat Application")
+
+    if "speech_recognition" not in st.session_state:
+        st.session_state.speech_recognition = SpeechRecognition()
+    if "voice_synthesis" not in st.session_state:
+        st.session_state.voice_synthesis = VoiceSynthesis()
+
+    api_key = st.text_input("Enter OpenAI API Key", type="password")
+    if not api_key:
+        st.warning("An OpenAI API key is required.")
+        return
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Start Speech Recognition"):
+            st.session_state.speech_recognition.start_recognition()
+            st.success("Speech recognition started.")
+
+    with col2:
+        if st.button("Stop Speech Recognition"):
+            st.session_state.speech_recognition.stop_recognition()
+            st.info("Speech recognition stopped.")
+
+    # Visual Status Display
+    with st.status("Voice chat in progress...", expanded=True) as status:
+        while st.session_state.speech_recognition.is_recognizing:
+            if not st.session_state.speech_recognition.voice_queue.empty():
+                recognized_text = st.session_state.speech_recognition.voice_queue.get()
+                status.update(label=f" Listening: {recognized_text}", state="running")
+
+                # OpenAI API Response
+                client = openai.OpenAI(api_key=api_key)
+                response = client.chat.completions.create(
+                    model="gpt-4-turbo-preview",
+                    messages=[{"role": "user", "content": recognized_text}],
+                )
+                assistant_response = response.choices[0].message.content
+                status.update(
+                    label=f" Responding: {assistant_response}", state="running"
+                )
+
+                # Voice synthesis (AI reads the response)
+                st.session_state.voice_synthesis.speak_text(assistant_response)
+
+
+if __name__ == "__main__":
+    main()
