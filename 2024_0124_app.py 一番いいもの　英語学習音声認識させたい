@@ -1,0 +1,76 @@
+class VoiceRecognition:
+   def __init__(self):
+       self.recognizer = sr.Recognizer()
+       self.microphone = sr.Microphone()
+       self.voice_queue = queue.Queue()
+       self.is_recognizing = False
+       self.recognition_thread = None
+
+   def _recognition_thread(self):
+       try:
+           with self.microphone as source:
+               logger.info("Adjusting for ambient noise...")
+               self.recognizer.adjust_for_ambient_noise(source, duration=2)
+               logger.info("Voice recognition started")
+               while self.is_recognizing:
+                   try:
+                       audio = self.recognizer.listen(source, timeout=2.0)
+                       text = self.recognizer.recognize_google(audio, language='ja-JP')
+                       logger.info(f"Recognition result: {text}")
+                       self.voice_queue.put(text)
+                   except sr.WaitTimeoutError:
+                       continue
+                   except sr.UnknownValueError:
+                       logger.info("Could not recognize voice")
+                   except Exception as e:
+                       logger.error(f"Voice recognition error: {str(e)}")
+       except Exception as e:
+           logger.error(f"Recognition thread error: {str(e)}")
+           self.is_recognizing = False
+
+   def start_recognition(self):
+       if not self.is_recognizing:
+           self.is_recognizing = True
+           self.recognition_thread = threading.Thread(target=self._recognition_thread, daemon=True)
+           self.recognition_thread.start()
+
+   def stop_recognition(self):
+       self.is_recognizing = False
+       if self.recognition_thread:
+           self.recognition_thread.join()
+
+class TextToSpeech:
+   def speak_text(self, text):
+       pass
+
+class DataAnalysis:
+   def __init__(self):
+       self.data = []
+
+   def add_data(self, text, time):
+       self.data.append({"text": text, "time": time})
+
+   def analyze_trends(self):
+       if not self.data:
+           return None
+       
+       conversation_count = len(self.data)
+       avg_char_count = sum(len(data['text']) for data in self.data) / conversation_count
+       
+       return {
+           "conversation_count": conversation_count,
+           "avg_char_count": avg_char_count
+       }
+
+   def create_graph(self):
+       if not self.data:
+           return None
+       
+       df = pd.DataFrame(self.data)
+       df['char_count'] = df['text'].str.len()
+       df['time'] = pd.to_datetime(df['time'])
+       
+       fig = px.line(df, x='time', y='char_count', 
+                     title='Conversation Character Count Trend', 
+                     color_discrete_sequence=['#FF1493'])
+       return fig
