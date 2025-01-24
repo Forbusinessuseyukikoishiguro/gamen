@@ -1,0 +1,276 @@
+import streamlit as st
+import speech_recognition as sr
+import openai
+import queue
+import threading
+import logging
+from datetime import datetime
+import pandas as pd
+import plotly.express as px
+import wave
+import os
+
+st.set_page_config(
+    page_title="Voice Chat",
+    page_icon="💬",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+st.markdown("""
+<style>
+.stApp {
+    background-color: #FFF0F5;
+}
+.stButton>button {
+    background-color: #FF69B4;
+    color: white;
+    border: none;
+}
+.stTextInput>div>div>input {
+    background-color: #FFE4E1;
+    color: #8B008B;
+}
+.stMetric {
+    background-color: #DDA0DD;
+    border-radius: 10px;
+    padding: 10px;
+    color: white;
+}
+</style>
+""", unsafe_allow_html=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger(__name__)
+
+class VoiceRecording:
+    def __init__(self):
+        self.recordings = []
+        self.current_recording = None
+        self.audio_data = None
+        
+    def start_recording(self, audio):
+        self.current_recording = {
+            'audio': audio,
+            'timestamp': datetime.now(),
+            'text': None
+        }
+        
+    def save_recording(self, text):
+        if self.current_recording:
+            self.current_recording['text'] = text
+            self.recordings.append(self.current_recording)
+            self.current_recording = None
+            
+    def get_recordings(self):
+        return self.recordings
+
+    def save_audio_file(self, index):
+        if 0 <= index < len(self.recordings):
+            if not os.path.exists('recordings'):
+                os.makedirs('recordings')
+            timestamp = self.recordings[index]['timestamp'].strftime('%Y%m%d_%H%M%S')
+            filename = f'recordings/recording_{timestamp}.wav'
+            with open(filename, 'wb') as f:
+                f.write(self.recordings[index]['audio'].get_wav_data())
+            return filename
+        return None
+
+class VoiceRecognition:
+    def __init__(self):
+        self.recognizer = sr.Recognizer()
+        self.microphone = sr.Microphone()
+        self.voice_queue = queue.Queue()
+        self.is_recognizing = False
+        self.recognition_thread = None
+        self.recorder = VoiceRecording()
+        
+        self.recognizer.energy_threshold = 300
+        self.recognizer.dynamic_energy_threshold = True
+        self.recognizer.dynamic_energy_adjustment_damping = 0.15
+        self.recognizer.dynamic_energy_ratio = 1.5
+        self.recognizer.pause_threshold = 0.8
+        self.recognizer.phrase_threshold = 0.3
+        self.recognizer.non_speaking_duration = 0.5
+
+    def _recognition_thread(self):
+        try:
+            with self.microphone as source:
+                logger.info("Adjusting for ambient noise...")
+                self.recognizer.adjust_for_ambient_noise(source, duration=3)
+                logger.info("Voice recognition started")
+                
+                while self.is_recognizing:
+                    try:
+                        audio = self.recognizer.listen(source, timeout=3.0, phrase_time_limit=10.0)
+                        self.recorder.start_recording(audio)
+                        
+                        text = None
+                        try:
+                            text = self.recognizer.recognize_google(audio, language='ja-JP')
+                        except:
+                            try:
+                                text = self.recognizer.recognize_sphinx(audio, language='ja-JP')
+                            except:
+                                pass
+                        
+                        if text:
+                            logger.info(f"Recognition result: {text}")
+                            self.voice_queue.put(text)
+                            self.recorder.save_recording(text)
+                        else:
+                            logger.info("Could not recognize voice")
+                            
+                    except sr.WaitTimeoutError:
+                        continue
+                    except sr.UnknownValueError:
+                        logger.info("Could not recognize voice")
+                    except Exception as e:
+                        logger.error(f"Voice recognition error: {str(e)}")
+                        
+        except Exception as e:
+            logger.error(f"Recognition thread error: {str(e)}")
+            self.is_recognizing = False
+
+    def start_recognition(self):
+        if not self.is_recognizing:
+            self.is_recognizing = True
+            self.recognition_thread = threading.Thread(target=self._recognition_thread, daemon=True)
+            self.recognition_thread.start()
+
+    def stop_recognition(self):
+        self.is_recognizing = False
+        if self.recognition_thread:
+            self.recognition_thread.join()
+
+class VoiceSynthesis:
+    def text_to_speech(self, text):
+        pass
+
+class DataAnalysis:
+    def __init__(self):
+        self.data = []
+
+    def add_data(self, text, time):
+        self.data.append({"text": text, "time": time})
+
+    def analyze_trends(self):
+        if not self.data:
+            return None
+        
+        dialogue_count = len(self.data)
+        avg_char_count = sum(len(data['text']) for data in self.data) / dialogue_count
+        
+        return {
+            "dialogue_count": dialogue_count,
+            "avg_char_count": avg_char_count
+        }
+
+    def create_graph(self):
+        if not self.data:
+            return None
+        
+        df = pd.DataFrame(self.data)
+        df['char_count'] = df['text'].str.len()
+        df['time'] = pd.to_datetime(df['time'])
+        
+        fig = px.line(df, x='time', y='char_count',
+                     title='Conversation Character Count Trend',
+                     color_discrete_sequence=['#FF1493'])
+        return fig
+
+def main():
+    st.title("💖 Voice Chat English Learning")
+
+    api_key = st.text_input("Enter OpenAI API Key", type="password")
+    if not api_key:
+        st.warning("✨ OpenAI API Key required")
+        return
+
+    client = openai.OpenAI(api_key=api_key)
+
+    if "voice_recognition" not in st.session_state:
+        st.session_state.voice_recognition = VoiceRecognition()
+    if "voice_synthesis" not in st.session_state:
+        st.session_state.voice_synthesis = VoiceSynthesis()
+    if "data_analysis" not in st.session_state:
+        st.session_state.data_analysis = DataAnalysis()
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🎤 Start Recognition"):
+            st.session_state.voice_recognition.start_recognition()
+            st.success("✨ Voice recognition started")
+
+    with col2:
+        if st.button("⏹️ Stop Recognition"):
+            st.session_state.voice_recognition.stop_recognition()
+            st.info("🌸 Voice recognition stopped")
+
+    # 録音リストの表示
+    if hasattr(st.session_state.voice_recognition, 'recorder') and st.session_state.voice_recognition.recorder.recordings:
+        st.subheader("📝 Recording History")
+        for i, recording in enumerate(st.session_state.voice_recognition.recorder.recordings):
+            col1, col2, col3 = st.columns([2,3,1])
+            with col1:
+                st.text(recording['timestamp'].strftime('%Y-%m-%d %H:%M:%S'))
+            with col2:
+                st.text(recording['text'])
+            with col3:
+                if st.button(f"🔊 Play #{i+1}", key=f"play_{i}"):
+                    filename = st.session_state.voice_recognition.recorder.save_audio_file(i)
+                    if filename:
+                        with open(filename, 'rb') as f:
+                            st.audio(f.read(), format='audio/wav')
+
+    try:
+        if not st.session_state.voice_recognition.voice_queue.empty():
+            recognized_text = st.session_state.voice_recognition.voice_queue.get()
+            st.write(f"💬 Recognized text: {recognized_text}")
+
+            response = client.chat.completions.create(
+                model="gpt-4-turbo-preview",
+                messages=[
+                    {"role": "system", "content": "You are a kind and gentle Japanese assistant. Please converse in a cute, feminine, and soft tone."},
+                    {"role": "user", "content": recognized_text}
+                ]
+            )
+            assistant_response = response.choices[0].message.content
+            
+            st.write(f"🌺 Assistant response: {assistant_response}")
+
+            st.session_state.voice_synthesis.text_to_speech(assistant_response)
+
+            current_time = datetime.now()
+            st.session_state.data_analysis.add_data(recognized_text, current_time)
+            st.session_state.data_analysis.add_data(assistant_response, current_time)
+
+            analysis = st.session_state.data_analysis.analyze_trends()
+            if analysis:
+                st.subheader("💕 Conversation Analysis")
+                col1, col2 = st.columns(2)
+                col1.metric("💬 Total Dialogues", analysis["dialogue_count"])
+                col2.metric("✍️ Average Character Count", f"{analysis['avg_char_count']:.1f}")
+
+            graph = st.session_state.data_analysis.create_graph()
+            if graph:
+                st.plotly_chart(graph)
+
+    except Exception as e:
+        st.error(f"🌸 An error occurred: {str(e)}")
+
+if __name__ == "__main__":
+    main()
+
+# Requirements:
+# pip install streamlit speech_recognition openai>=1.0.0 pandas plotly pocketsphinx
+#
+# Additional setup for voice recognition:
+# Mac: brew install portaudio
+# Windows: pip install pipwin && pipwin install pyaudio
+# Linux: sudo apt-get install python3-pyaudio
+#2025/01/25app.py 録音実装OK複数
