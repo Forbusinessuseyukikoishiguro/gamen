@@ -1,0 +1,107 @@
+import streamlit as st
+import speech_recognition as sr
+import queue
+import threading
+from datetime import datetime
+import os
+
+st.set_page_config(page_title="リアルタイム文字起こし", page_icon="💬", layout="wide")
+
+
+class RealTimeTranscription:
+    def __init__(self):
+        self.recognizer = sr.Recognizer()
+        self.microphone = sr.Microphone()
+        self.is_listening = False
+        self.transcription_placeholder = None
+        os.makedirs("recordings", exist_ok=True)
+
+    def start_listening(self):
+        self.is_listening = True
+        threading.Thread(target=self._listen_continuously, daemon=True).start()
+
+    def stop_listening(self):
+        self.is_listening = False
+
+    def _listen_continuously(self):
+        with self.microphone as source:
+            # ノイズ調整
+            self.recognizer.adjust_for_ambient_noise(source, duration=1)
+
+            while self.is_listening:
+                try:
+                    # 音声を listen
+                    audio = self.recognizer.listen(
+                        source, timeout=None, phrase_time_limit=5
+                    )
+
+                    # バックグラウンドで音声認識を実行
+                    threading.Thread(
+                        target=self._transcribe_audio, args=(audio,), daemon=True
+                    ).start()
+
+                except Exception as e:
+                    st.error(f"リスニング中にエラーが発生: {e}")
+
+    def _transcribe_audio(self, audio):
+        try:
+            # 音声をテキストに変換
+            text = self.recognizer.recognize_google(audio, language="ja-JP")
+
+            # 音声ファイルを保存
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            audio_path = f"recordings/recording_{timestamp}.wav"
+            with open(audio_path, "wb") as f:
+                f.write(audio.get_wav_data())
+
+            # 画面に文字起こし結果を表示
+            if self.transcription_placeholder:
+                current_text = self.transcription_placeholder.session_state.get(
+                    "transcription", ""
+                )
+                updated_text = current_text + text + "\n"
+                self.transcription_placeholder.text_area(
+                    "文字起こし", value=updated_text, height=300
+                )
+                self.transcription_placeholder.session_state.transcription = (
+                    updated_text
+                )
+
+        except sr.UnknownValueError:
+            st.warning("音声を認識できませんでした")
+        except Exception as e:
+            st.error(f"文字起こし中にエラーが発生: {e}")
+
+
+def main():
+    st.title("🎙️ リアルタイム文字起こしアプリ")
+
+    # トランスクリプションインスタンス初期化
+    if "transcriber" not in st.session_state:
+        st.session_state.transcriber = RealTimeTranscription()
+
+    # 文字起こし表示用のプレースホルダー
+    transcription_placeholder = st.empty()
+    st.session_state.transcriber.transcription_placeholder = transcription_placeholder
+
+    # コントロールボタン
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🔴 録音開始"):
+            st.session_state.transcriber.start_listening()
+            st.success("録音を開始しました")
+
+    with col2:
+        if st.button("⏹️ 録音停止"):
+            st.session_state.transcriber.stop_listening()
+            st.info("録音を停止しました")
+
+    # 初期テキストエリアのセットアップ
+    if "transcription" not in st.session_state:
+        st.session_state.transcription = ""
+
+
+if __name__ == "__main__":
+    main()
+
+#1/24_文字起こし精度あがるapp.pyが画面に即時反映されない
