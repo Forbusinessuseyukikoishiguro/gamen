@@ -1,0 +1,152 @@
+import streamlit as st
+import speech_recognition as sr
+import queue
+import threading
+from datetime import datetime
+import os
+
+# Streamlitアプリの設定
+# - ページタイトル、アイコン、レイアウトを設定
+st.set_page_config(
+    page_title="Instant Transcription App",
+    page_icon="💬",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# カスタムCSSでアプリのデザインをカスタマイズ
+# - ピンク系の背景色
+# - ボタンのスタイリング
+st.markdown(
+    """
+<style>
+.stApp { background-color: #FFF0F5; }
+.stButton>button { 
+    background-color: #FF69B4; 
+    color: white; 
+    border: none; 
+}
+.stTextArea {
+    background-color: #FFE4E1;
+    color: #8B008B;
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
+
+class VoiceRecognition:
+    def __init__(self):
+        # 音声認識の初期設定
+        # - 音声認識用のライブラリ準備
+        # - 音声キューの初期化
+        # - 録音フォルダの作成
+        self.recognizer = sr.Recognizer()
+        self.microphone = sr.Microphone()
+        self.voice_queue = queue.Queue()
+        self.is_recording = False
+        self.recognition_thread = None
+        os.makedirs("recordings", exist_ok=True)
+
+    def _recognition_thread(self):
+        # 音声認識のメインスレッド
+        # - 継続的に音声を listening
+        # - 音声を text に変換
+        # - 音声ファイルを保存
+        try:
+            with self.microphone as source:
+                self.recognizer.adjust_for_ambient_noise(source, duration=2)
+                while self.is_recording:
+                    try:
+                        audio = self.recognizer.listen(source, timeout=2.0)
+
+                        # 音声ファイルの保存
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        audio_path = f"recordings/recording_{timestamp}.wav"
+                        with open(audio_path, "wb") as f:
+                            f.write(audio.get_wav_data())
+
+                        # 音声認識
+                        text = self.recognizer.recognize_google(audio, language="ja-JP")
+                        self.voice_queue.put((text, audio_path))
+                    except sr.WaitTimeoutError:
+                        continue
+                    except sr.UnknownValueError:
+                        st.warning("Could not understand audio")
+                    except Exception as e:
+                        st.error(f"Voice recognition error: {str(e)}")
+        except Exception as e:
+            st.error(f"Recognition thread error: {str(e)}")
+            self.is_recording = False
+
+    def start_recognition(self):
+        # 音声認識の開始
+        # - スレッドを作成して音声認識を開始
+        if not self.is_recording:
+            self.is_recording = True
+            self.recognition_thread = threading.Thread(
+                target=self._recognition_thread, daemon=True
+            )
+            self.recognition_thread.start()
+
+    def stop_recognition(self):
+        # 音声認識の停止
+        # - スレッドを停止
+        self.is_recording = False
+        if self.recognition_thread:
+            self.recognition_thread.join()
+
+
+def main():
+    st.title("💖 Instant Transcription App")
+
+    # セッション状態の管理
+    # - 音声認識オブジェクトをセッションに保存
+    if "voice_recognition" not in st.session_state:
+        st.session_state.voice_recognition = VoiceRecognition()
+
+    # 結果表示用のプレースホルダー
+    transcription_placeholder = st.empty()
+    audio_placeholder = st.empty()
+
+    # 音声認識コントロールボタン
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🎤 Start Recognition"):
+            st.session_state.voice_recognition.start_recognition()
+            st.success("Recognition started")
+
+    with col2:
+        if st.button("⏹️ Stop Recognition"):
+            st.session_state.voice_recognition.stop_recognition()
+            st.info("Recognition stopped")
+
+    # 音声認識結果の処理
+    try:
+        if not st.session_state.voice_recognition.voice_queue.empty():
+            # 最新の音声認識結果を取得
+            recognized_text, audio_path = (
+                st.session_state.voice_recognition.voice_queue.get()
+            )
+
+            # 結果を画面に表示
+            transcription_placeholder.markdown(
+                f"""
+            ### 🎙️ Transcription Result
+            **Text:** {recognized_text}
+            """
+            )
+
+            # 音声ファイルを再生
+            audio_placeholder.audio(audio_path)
+
+    except Exception as e:
+        st.error(f"An error occurred: {str(e)}")
+
+
+if __name__ == "__main__":
+    main()
+
+# インストール手順:
+# pip install streamlit speech_recognition
