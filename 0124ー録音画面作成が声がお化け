@@ -1,0 +1,169 @@
+import streamlit as st
+import speech_recognition as sr
+import openai
+import queue
+import threading
+import logging
+from datetime import datetime
+import pandas as pd
+import plotly.express as px
+import wave
+import os
+
+# Page Configuration
+st.set_page_config(
+    page_title="AI Voice Chat & Recorder",
+    page_icon="🎙️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Logging Configuration
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger(__name__)
+
+# Speech Recognition with Recording
+class SpeechRecognition:
+    def __init__(self):
+        self.recognizer = sr.Recognizer()
+        self.microphone = sr.Microphone()
+        self.voice_queue = queue.Queue()
+        self.is_recognizing = False
+        self.recognition_thread = None
+        self.audio_file = "recorded_audio.wav"
+
+    def _recognition_thread(self):
+        try:
+            with self.microphone as source, wave.open(self.audio_file, "wb") as wf:
+                self.recognizer.adjust_for_ambient_noise(source, duration=2)
+                wf.setnchannels(1)  # Mono
+                wf.setsampwidth(2)  # 16-bit
+                wf.setframerate(16000)  # Sampling rate
+
+                while self.is_recognizing:
+                    try:
+                        audio = self.recognizer.listen(source, timeout=2.0)
+                        wf.writeframes(audio.get_wav_data())  # Save audio
+                        text = self.recognizer.recognize_google(audio, language='en-US')
+                        self.voice_queue.put(text)
+                    except sr.WaitTimeoutError:
+                        continue
+                    except sr.UnknownValueError:
+                        logger.info("Could not recognize speech")
+                    except Exception as e:
+                        logger.error(f"Speech recognition error: {str(e)}")
+        except Exception as e:
+            logger.error(f"Recognition thread error: {str(e)}")
+            self.is_recognizing = False
+
+    def start_recognition(self):
+        if not self.is_recognizing:
+            self.is_recognizing = True
+            self.recognition_thread = threading.Thread(target=self._recognition_thread, daemon=True)
+            self.recognition_thread.start()
+
+    def stop_recognition(self):
+        self.is_recognizing = False
+        if self.recognition_thread:
+            self.recognition_thread.join()
+
+# Data Analysis Class
+class DataAnalysis:
+    def __init__(self):
+        self.data = []
+
+    def add_data(self, text, time):
+        self.data.append({"text": text, "time": time})
+
+    def generate_graph(self):
+        if not self.data:
+            return None
+
+        df = pd.DataFrame(self.data)
+        df['char_count'] = df['text'].str.len()
+        df['time'] = pd.to_datetime(df['time'])
+
+        fig = px.line(df, x='time', y='char_count',
+                      title='Character Count Over Time',
+                      color_discrete_sequence=['#FF1493'])  # Deep Pink
+        return fig
+
+def main():
+    st.title("🎙️ AI Voice Chat & Recorder")
+
+    # OpenAI API Key Input
+    api_key = st.text_input("Enter OpenAI API Key", type="password")
+    if not api_key:
+        st.warning("✨ OpenAI API key is required")
+        return
+
+    # Initialize OpenAI Client
+    client = openai.Client(api_key=api_key)
+
+    # Initialize session state
+    if "speech_recognition" not in st.session_state:
+        st.session_state.speech_recognition = SpeechRecognition()
+    if "data_analysis" not in st.session_state:
+        st.session_state.data_analysis = DataAnalysis()
+
+    # Speech Recognition Controls
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🎤 Start Recording"):
+            st.session_state.speech_recognition.start_recognition()
+            st.success("✨ Recording started")
+
+    with col2:
+        if st.button("⏹️ Stop Recording"):
+            st.session_state.speech_recognition.stop_recognition()
+            st.info("🌸 Recording stopped")
+
+    # Play recorded audio
+    if os.path.exists(st.session_state.speech_recognition.audio_file):
+        st.audio(st.session_state.speech_recognition.audio_file)
+
+    # Download button for recorded audio
+    if os.path.exists(st.session_state.speech_recognition.audio_file):
+        with open(st.session_state.speech_recognition.audio_file, "rb") as file:
+            st.download_button(label="🎵 Download Recorded Audio",
+                               data=file,
+                               file_name="recorded_audio.wav",
+                               mime="audio/wav")
+
+    # Speech Processing & AI Response
+    try:
+        if not st.session_state.speech_recognition.voice_queue.empty():
+            recognized_text = st.session_state.speech_recognition.voice_queue.get()
+            st.write(f"💬 Recognized Text: {recognized_text}")
+
+            # Generate AI Response via OpenAI API
+            response = client.chat.completions.create(
+                model="gpt-4-turbo-preview",
+                messages=[
+                    {"role": "system", "content": "You are a friendly AI assistant. Provide helpful responses in a clear and concise manner."},
+                    {"role": "user", "content": recognized_text}
+                ]
+            )
+            assistant_response = response.choices[0].message.content
+
+            st.write(f"🌺 AI Response: {assistant_response}")
+
+            # Add Data for Analysis
+            current_time = datetime.now()
+            st.session_state.data_analysis.add_data(recognized_text, current_time)
+            st.session_state.data_analysis.add_data(assistant_response, current_time)
+
+            # Display Data Analysis
+            graph = st.session_state.data_analysis.generate_graph()
+            if graph:
+                st.plotly_chart(graph)
+
+    except Exception as e:
+        st.error(f"🌸 An error occurred: {str(e)}")
+
+if __name__ == "__main__":
+    main()
