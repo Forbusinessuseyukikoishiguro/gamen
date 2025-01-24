@@ -1,0 +1,42 @@
+# Speak the assistant's response
+            st.session_state.voice_synthesis.speak_text(assistant_response)
+
+            # Add data for analysis
+            current_time = datetime.now()
+            st.session_state.data_analysis.add_data(recognized_text, current_time)
+            st.session_state.data_analysis.add_data(assistant_response, current_time)
+
+            # Display data analysis
+            analysis = st.session_state.data_analysis.analyze_trends()
+            if analysis:
+                st.subheader("💕 Conversation Analysis")
+                col1, col2 = st.columns(2)
+                col1.metric("💬 Total Conversations", analysis["conversation_count"])
+                col2.metric("✍️ Avg Characters", f"{analysis['avg_char_count']:.1f}")
+
+            graph = st.session_state.data_analysis.create_graph()
+            if graph:
+                st.plotly_chart(graph)
+
+            # Display transcription history
+            with st.expander("📜 Transcription History"):
+                for item in st.session_state.data_analysis.transcripts:
+                    st.write(f"📝 {item['transcript']}")
+                    st.audio(item['audio_path'])
+
+    except Exception as e:
+        st.error(f"🌸 An error occurred: {str(e)}")
+
+if __name__ == "__main__":
+    main()
+
+# Installation requirements:
+# pip install streamlit speech_recognition openai pandas plotly pyttsx3
+# 
+# Additional setup for voice recognition: 
+#   Mac: brew install portaudio
+#   Windows: pip install pipwin && pipwin install pyaudio
+#   Linux: sudo apt-get install python3-pyaudio
+
+#2025_0124_app.py 録音機能の追加
+#残課題：画面共有と音声コミュニケーション・文字起こし
