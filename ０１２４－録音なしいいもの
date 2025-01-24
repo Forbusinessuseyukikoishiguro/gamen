@@ -1,0 +1,205 @@
+import streamlit as st
+import speech_recognition as sr
+import openai
+import queue
+import threading
+import logging
+from datetime import datetime
+import pandas as pd
+import plotly.express as px
+
+# Page Configuration
+st.set_page_config(
+    page_title="Feminine Voice Chat",
+    page_icon="💬",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Custom CSS for feminine color scheme
+st.markdown("""
+<style>
+.stApp {
+    background-color: #FFF0F5;  /* Light pink */
+}
+.stButton>button {
+    background-color: #FF69B4;  /* Hot pink */
+    color: white;
+    border: none;
+}
+.stTextInput>div>div>input {
+    background-color: #FFE4E1;  /* Light pink */
+    color: #8B008B;  /* Dark magenta */
+}
+.stMetric {
+    background-color: #DDA0DD;  /* Plum */
+    border-radius: 10px;
+    padding: 10px;
+    color: white;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# Logging Configuration
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger(__name__)
+
+# Speech Recognition Class
+class SpeechRecognition:
+    def __init__(self):
+        self.recognizer = sr.Recognizer()
+        self.microphone = sr.Microphone()
+        self.voice_queue = queue.Queue()
+        self.is_recognizing = False
+        self.recognition_thread = None
+
+    def _recognition_thread(self):
+        try:
+            with self.microphone as source:
+                logger.info("Adjusting for ambient noise...")
+                self.recognizer.adjust_for_ambient_noise(source, duration=2)
+                logger.info("Speech recognition started")
+                while self.is_recognizing:
+                    try:
+                        audio = self.recognizer.listen(source, timeout=2.0)
+                        text = self.recognizer.recognize_google(audio, language='en-US')
+                        logger.info(f"Recognized text: {text}")
+                        self.voice_queue.put(text)
+                    except sr.WaitTimeoutError:
+                        continue
+                    except sr.UnknownValueError:
+                        logger.info("Could not recognize speech")
+                    except Exception as e:
+                        logger.error(f"Speech recognition error: {str(e)}")
+        except Exception as e:
+            logger.error(f"Recognition thread error: {str(e)}")
+            self.is_recognizing = False
+
+    def start_recognition(self):
+        if not self.is_recognizing:
+            self.is_recognizing = True
+            self.recognition_thread = threading.Thread(target=self._recognition_thread, daemon=True)
+            self.recognition_thread.start()
+
+    def stop_recognition(self):
+        self.is_recognizing = False
+        if self.recognition_thread:
+            self.recognition_thread.join()
+
+# Text-to-Speech Class (Currently Not Implemented)
+class TextToSpeech:
+    def speak_text(self, text):
+        pass  # Placeholder for future implementation
+
+# Data Analysis Class
+class DataAnalysis:
+    def __init__(self):
+        self.data = []
+
+    def add_data(self, text, time):
+        self.data.append({"text": text, "time": time})
+
+    def trend_analysis(self):
+        if not self.data:
+            return None
+
+        total_conversations = len(self.data)
+        avg_chars = sum(len(entry['text']) for entry in self.data) / total_conversations
+
+        return {
+            "total_conversations": total_conversations,
+            "avg_chars": avg_chars
+        }
+
+    def generate_graph(self):
+        if not self.data:
+            return None
+
+        df = pd.DataFrame(self.data)
+        df['char_count'] = df['text'].str.len()
+        df['time'] = pd.to_datetime(df['time'])
+
+        fig = px.line(df, x='time', y='char_count',
+                      title='Character Count Over Time',
+                      color_discrete_sequence=['#FF1493'])  # Deep Pink
+        return fig
+
+def main():
+    st.title("💖 Voice Chat for English Learning")
+
+    # OpenAI API Key Input
+    api_key = st.text_input("Enter OpenAI API Key", type="password")
+    if not api_key:
+        st.warning("✨ OpenAI API key is required")
+        return
+
+    # Initialize OpenAI Client
+    client = openai.Client(api_key=api_key)
+
+    # Initialize session state
+    if "speech_recognition" not in st.session_state:
+        st.session_state.speech_recognition = SpeechRecognition()
+    if "text_to_speech" not in st.session_state:
+        st.session_state.text_to_speech = TextToSpeech()
+    if "data_analysis" not in st.session_state:
+        st.session_state.data_analysis = DataAnalysis()
+
+    # Speech Recognition Controls
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🎤 Start Speech Recognition"):
+            st.session_state.speech_recognition.start_recognition()
+            st.success("✨ Speech recognition started")
+
+    with col2:
+        if st.button("⏹️ Stop Speech Recognition"):
+            st.session_state.speech_recognition.stop_recognition()
+            st.info("🌸 Speech recognition stopped")
+
+    # Process Speech and Generate AI Response
+    try:
+        if not st.session_state.speech_recognition.voice_queue.empty():
+            recognized_text = st.session_state.speech_recognition.voice_queue.get()
+            st.write(f"💬 Recognized Text: {recognized_text}")
+
+            # Generate AI Response via OpenAI API
+            response = client.chat.completions.create(
+                model="gpt-4-turbo-preview",
+                messages=[
+                    {"role": "system", "content": "You are a kind and friendly AI assistant. Speak in a cute, feminine, and soft tone."},
+                    {"role": "user", "content": recognized_text}
+                ]
+            )
+            assistant_response = response.choices[0].message.content
+
+            st.write(f"🌺 Assistant Response: {assistant_response}")
+
+            # Text-to-Speech (Not Implemented Yet)
+            st.session_state.text_to_speech.speak_text(assistant_response)
+
+            # Add Data for Analysis
+            current_time = datetime.now()
+            st.session_state.data_analysis.add_data(recognized_text, current_time)
+            st.session_state.data_analysis.add_data(assistant_response, current_time)
+
+            # Display Data Analysis
+            analysis = st.session_state.data_analysis.trend_analysis()
+            if analysis:
+                st.subheader("💕 Conversation Analysis")
+                col1, col2 = st.columns(2)
+                col1.metric("💬 Total Conversations", analysis["total_conversations"])
+                col2.metric("✍️ Average Characters", f"{analysis['avg_chars']:.1f}")
+
+            graph = st.session_state.data_analysis.generate_graph()
+            if graph:
+                st.plotly_chart(graph)
+
+    except Exception as e:
+        st.error(f"🌸 An error occurred: {str(e)}")
+
+if __name__ == "__main__":
+    main()
