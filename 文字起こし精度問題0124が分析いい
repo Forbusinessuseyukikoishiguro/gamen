@@ -1,0 +1,242 @@
+import streamlit as st
+import speech_recognition as sr
+import openai
+import queue
+import threading
+import logging
+from datetime import datetime
+import pandas as pd
+import plotly.express as px
+
+
+# ページ設定でピンクとパープルの柔らかな色合いを適用
+st.set_page_config(
+    page_title="フェミニンな音声チャット",
+    page_icon="💬",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+
+# カスタムCSSでフェミニンな配色を追加
+st.markdown("""
+<style>
+.stApp {
+    background-color: #FFF0F5;  /* 淡いピンク */
+}
+.stButton>button {
+    background-color: #FF69B4;  /* ホットピンク */
+    color: white;
+    border: none;
+}
+.stTextInput>div>div>input {
+    background-color: #FFE4E1;  /* 薄いピンク */
+    color: #8B008B;  /* ダークマゼンタ */
+}
+.stMetric {
+    background-color: #DDA0DD;  /* プラム */
+    border-radius: 10px;
+    padding: 10px;
+    color: white;
+}
+</style>
+""", unsafe_allow_html=True)
+
+
+# ログ設定
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger(__name__)
+
+
+# 以下は既存のコードと同じ（音声認識、音声合成、データ分析のクラス定義）
+class 音声認識:
+    def __init__(self):
+        self.recognizer = sr.Recognizer()
+        self.microphone = sr.Microphone()
+        self.音声キュー = queue.Queue()
+        self.認識中 = False
+        self.認識スレッド = None
+
+
+    def _認識スレッド(self):
+        try:
+            with self.microphone as source:
+                logger.info("周辺ノイズを調整中...")
+                self.recognizer.adjust_for_ambient_noise(source, duration=2)
+                logger.info("音声認識を開始しました")
+                while self.認識中:
+                    try:
+                        audio = self.recognizer.listen(source, timeout=2.0)
+                        text = self.recognizer.recognize_google(audio, language='ja-JP')
+                        logger.info(f"認識結果: {text}")
+                        self.音声キュー.put(text)
+                    except sr.WaitTimeoutError:
+                        continue
+                    except sr.UnknownValueError:
+                        logger.info("音声を認識できませんでした")
+                    except Exception as e:
+                        logger.error(f"音声認識エラー: {str(e)}")
+        except Exception as e:
+            logger.error(f"認識スレッドエラー: {str(e)}")
+            self.認識中 = False
+
+
+    def 認識開始(self):
+        if not self.認識中:
+            self.認識中 = True
+            self.認識スレッド = threading.Thread(target=self._認識スレッド, daemon=True)
+            self.認識スレッド.start()
+
+
+    def 認識停止(self):
+        self.認識中 = False
+        if self.認識スレッド:
+            self.認識スレッド.join()
+
+
+class 音声合成:
+    def テキスト読み上げ(self, text):
+        # 実際の音声出力は省略。必要に応じて外部ライブラリを追加できます。
+        pass
+
+
+class データ分析:
+    def __init__(self):
+        self.データ = []
+
+
+    def データ追加(self, テキスト, 時間):
+        self.データ.append({"テキスト": テキスト, "時間": 時間})
+
+
+    def 傾向分析(self):
+        if not self.データ:
+            return None
+       
+        対話回数 = len(self.データ)
+        平均文字数 = sum(len(データ['テキスト']) for データ in self.データ) / 対話回数
+       
+        return {
+            "対話回数": 対話回数,
+            "平均文字数": 平均文字数
+        }
+
+
+    def グラフ作成(self):
+        if not self.データ:
+            return None
+       
+        df = pd.DataFrame(self.データ)
+        df['文字数'] = df['テキスト'].str.len()
+        df['時間'] = pd.to_datetime(df['時間'])
+       
+        fig = px.line(df, x='時間', y='文字数',
+                      title='会話の文字数推移',
+                      color_discrete_sequence=['#FF1493'])  # ディープピンク
+        return fig
+
+
+def main():
+    st.title("💖 音声チャットde英語学習")
+
+
+    # OpenAI APIキーの入力
+    api_key = st.text_input("OpenAI APIキーを入力してください", type="password")
+    if not api_key:
+        st.warning("✨ OpenAI APIキーが必要です")
+        return
+
+
+    # クライアントの初期化
+    client = openai.OpenAI(api_key=api_key)
+
+
+    # セッション状態の初期化
+    if "音声認識" not in st.session_state:
+        st.session_state.音声認識 = 音声認識()
+    if "音声合成" not in st.session_state:
+        st.session_state.音声合成 = 音声合成()
+    if "データ分析" not in st.session_state:
+        st.session_state.データ分析 = データ分析()
+
+
+    # 音声認識コントロール
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🎤 音声認識開始"):
+            st.session_state.音声認識.認識開始()
+            st.success("✨ 音声認識を開始しました")
+
+
+    with col2:
+        if st.button("⏹️ 音声認識停止"):
+            st.session_state.音声認識.認識停止()
+            st.info("🌸 音声認識を停止しました")
+
+
+    # 音声処理と応答生成
+    try:
+        # 音声キューからテキストを取得
+        if not st.session_state.音声認識.音声キュー.empty():
+            認識テキスト = st.session_state.音声認識.音声キュー.get()
+            st.write(f"💬 認識されたテキスト: {認識テキスト}")
+
+
+            # OpenAI APIでの応答生成
+            response = client.chat.completions.create(
+                model="gpt-4-turbo-preview",
+                messages=[
+                    {"role": "system", "content": "あなたは親切で優しい日本語アシスタントです。cute、feminine、softなトーンで会話してください。"},
+                    {"role": "user", "content": 認識テキスト}
+                ]
+            )
+            アシスタント応答 = response.choices[0].message.content
+           
+            st.write(f"🌺 アシスタントの応答: {アシスタント応答}")
+
+
+            # 音声合成（現在は機能していません）
+            st.session_state.音声合成.テキスト読み上げ(アシスタント応答)
+
+
+            # データ分析用にデータを追加
+            current_time = datetime.now()
+            st.session_state.データ分析.データ追加(認識テキスト, current_time)
+            st.session_state.データ分析.データ追加(アシスタント応答, current_time)
+
+
+            # データ分析の表示
+            analysis = st.session_state.データ分析.傾向分析()
+            if analysis:
+                st.subheader("💕 会話分析")
+                col1, col2 = st.columns(2)
+                col1.metric("💬 総対話回数", analysis["対話回数"])
+                col2.metric("✍️ 平均文字数", f"{analysis['平均文字数']:.1f}")
+
+
+            graph = st.session_state.データ分析.グラフ作成()
+            if graph:
+                st.plotly_chart(graph)
+
+
+    except Exception as e:
+        st.error(f"🌸 エラーが発生しました: {str(e)}")
+
+
+if __name__ == "__main__":
+    main()
+
+
+# インストール要件:
+# pip install streamlit speech_recognition openai>=1.0.0 pandas plotly
+#
+# 音声認識用の追加セットアップ:
+# - PyAudioのインストール:
+#   Mac: brew install portaudio
+#   Windows: pip install pipwin && pipwin install pyaudio
+#   Linux: sudo apt-get install python3-pyaudio
+
